@@ -100,17 +100,50 @@ class CIO(object):
         self.K = num_interval
 
         x = np.linspace(0, T, self.K)
-        y = np.array(range(1, self.K+1))
-        self.phase = scipy.interpolate.interp1d(x, y, kind='zero')
+        y = np.array(range(1, self.K + 1))
+        self.phase = interp1d(x, y, kind='zero')
 
     def get_phase_index(self, t):
         return self.phase(t)
 
-    def compute_state(self):
-        base_pos = self.robot.get_base_position()
-        base_quat = self.robot.get_base_orientation()
-        end_effector_pos = self.robot.getEndEffectorPositions()
-        end_effector_quat = self.robot.getEndEffectorOrientations()
+    def _task_cost(self):
+        pass
+
+    def _contact_invariant_cost(self):
+        pass
+
+    def _physics_cost(self):
+        pass
 
     def optimize(self):
         pass
+
+
+if __name__ == "__main__":
+    from itertools import count
+    from pyrobolearn.simulators import Bullet
+    from pyrobolearn.worlds import BasicWorld
+    from pyrobolearn.robots import ANYmal
+
+    sim = Bullet()
+    world = BasicWorld(sim)
+
+    robot = ANYmal(sim)
+    # robot.disable_motor()
+
+    robot.draw_link_coms()
+    robot.print_info()
+
+    world.load_robot(robot)
+
+    cio = CIO(robot, 2)
+
+    for i in count():
+        q = np.concatenate([robot.get_base_pose(concatenate=True), robot.get_joint_positions()])
+        dq = np.concatenate([robot.get_base_velocity(), robot.get_joint_velocities()])
+        ddq = np.zeros_like(dq)
+
+        tau = robot.calculate_inverse_dynamics(ddq, dq, q)
+        # robot.set_joint_torques(tau[6:])
+
+        world.step(sim.dt)
