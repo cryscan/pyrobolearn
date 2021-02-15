@@ -7,8 +7,11 @@ References:
     [2] Mordatch's presentation given in CS294
 """
 
+from itertools import count
 import numpy as np
 from scipy.interpolate import interp1d
+from scipy.spatial.transform import Rotation
+from cvxopt import matrix, spmatrix, sparse, spdiag, solvers
 
 
 class CIO(object):
@@ -94,17 +97,53 @@ class CIO(object):
         [1] "Automated Discovery and Learning of Complex Movement Behaviors" (PhD thesis), Mordatch, 2015
     """
 
-    def __init__(self, robot, T, num_interval=20):
+    def __init__(self, robot, total_time, interval=0.5, delta_time=0.1):
         # TODO: think about optimizing multiple actors
         self.robot = robot
-        self.K = num_interval
+        self.D = robot.num_dofs
+        self.N = robot.num_end_effectors
+        self.U = len(robot.actuated_joints)
 
-        x = np.linspace(0, T, self.K)
+        self.K = round(total_time / interval)
+        self.T = round(total_time / delta_time)
+        self.delta_time = delta_time
+
+        x = np.linspace(0, self.T, self.K)
         y = np.array(range(1, self.K + 1))
         self.phase = interp1d(x, y, kind='zero')
 
+        # the values need to be optimized
+        self.params = np.concatenate([np.zeros(self.T * self.D), np.ones(self.K * self.N)])
+        self._init_joint_positions()
+
+        # the modulating matrix maps actuator space into full space
+        self.control_matrix = spmatrix(1.0, robot.actuated_joints, range(self.U), (self.D, self.U))
+        self.control_regular = spmatrix(1.0, range(self.U), range(self.U))
+
     def get_phase_index(self, t):
         return self.phase(t)
+
+    def _init_joint_positions(self):
+        base_pos = self.robot.get_base_position()
+        base_rot = self.robot.get_base_orientation()
+        base_rot = Rotation.from_quat(base_rot).as_rotvec()
+        q = np.atleast_2d(np.concatenate([base_pos, base_rot, self.robot.get_joint_positions()]))
+        q = q.repeat(self.T, axis=0)
+
+        qs = self.params[:self.T * self.D]
+        qs = qs.reshape([self.T, self.D])
+        qs[:] = q
+
+    def get_joint_positions(self, t):
+        qs = self.params[:self.T * self.D]
+        qs = qs.reshape([self.T, self.D])
+        return qs[t]
+
+    def get_contacts(self, t):
+        cs = self.params[self.T * self.D:]
+        cs = cs.reshape([self.K, self.N])
+        index = int(self.get_phase_index(t).tolist())
+        return cs[index]
 
     def _task_cost(self):
         pass
@@ -112,8 +151,39 @@ class CIO(object):
     def _contact_invariant_cost(self):
         pass
 
-    def _physics_cost(self):
-        pass
+    def physics_cost(self):
+        cost = 0
+
+        for t in range(1, self.T - 1):
+            # do finite differences
+            q = self.get_joint_positions(t)
+            dq = (self.get_joint_positions(t + 1) - self.get_joint_positions(t - 1)) / (2 * self.delta_time)
+            ddq = (self.get_joint_positions(t + 1) - 2 * q + self.get_joint_positions(t - 1)) / (self.delta_time ** 2)
+
+            # solve inverse dynamics for tau
+            base_pos = q[:3]
+            base_rot = q[3:6]
+            joint_pos = q[6:]
+
+            base_rot = Rotation.from_rotvec(base_rot).as_quat()
+            tau = self.robot.calculate_inverse_dynamics(ddq, dq, np.concatenate([base_pos, base_rot, joint_pos]))
+            tau = matrix(tau)
+
+            force_regular = (0.01 / (self.get_contacts(t) ** 2 + 0.001)).repeat(6)
+            force_regular = spdiag(force_regular.tolist())
+            regular = spdiag([force_regular, self.control_regular])
+
+            jac = np.vstack([robot.get_jacobian(i, joint_pos) for i in robot.end_effectors])
+            jac = sparse(jac.tolist())
+            combined = sparse([jac.T, self.control_matrix.T])
+
+            second_order = 2 * combined * combined.T + 2 * regular
+            first_order = - combined * tau
+            solution = solvers.qp(second_order, first_order)
+
+            cost += sum((combined.T * solution['x'] - tau) ** 2)
+
+        return cost
 
     def optimize(self):
         pass
@@ -131,12 +201,12 @@ if __name__ == "__main__":
     robot = ANYmal(sim)
     # robot.disable_motor()
 
-    robot.draw_link_coms()
     robot.print_info()
 
     world.load_robot(robot)
 
-    cio = CIO(robot, 2)
+    cio = CIO(robot, 10)
+    cio.physics_cost()
 
     for i in count():
         q = np.concatenate([robot.get_base_pose(concatenate=True), robot.get_joint_positions()])
@@ -145,5 +215,9 @@ if __name__ == "__main__":
 
         tau = robot.calculate_inverse_dynamics(ddq, dq, q)
         # robot.set_joint_torques(tau[6:])
+
+        link_id = robot.get_end_effector_ids(0)
+        q = robot.get_joint_positions()
+        J = robot.get_jacobian(link_id, q)
 
         world.step(sim.dt)
