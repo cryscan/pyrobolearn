@@ -9,7 +9,7 @@ References:
 
 from itertools import count
 import numpy as np
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, CubicSpline
 from scipy.spatial.transform import Rotation
 from cvxopt import matrix, spmatrix, sparse, spdiag, solvers
 
@@ -97,68 +97,69 @@ class CIO(object):
         [1] "Automated Discovery and Learning of Complex Movement Behaviors" (PhD thesis), Mordatch, 2015
     """
 
-    def __init__(self, robot, total_time, interval=0.5, delta_time=0.1):
+    def __init__(self, robot, horizon, interval=0.5, delta_time=0.1):
         # TODO: think about optimizing multiple actors
         self.robot = robot
         self.D = robot.num_dofs
         self.N = robot.num_end_effectors
         self.U = len(robot.actuated_joints)
 
-        self.K = round(total_time / interval)
-        self.T = round(total_time / delta_time)
+        self.K = round(horizon / interval)
+        self.T = round(horizon / delta_time)
         self.delta_time = delta_time
+        self.horizon = horizon
 
-        x = np.linspace(0, self.T, self.K)
+        x = np.linspace(0, horizon, self.K)
         y = np.array(range(1, self.K + 1))
-        self.phase = interp1d(x, y, kind='zero')
+        self.phase = interp1d(x, y, kind='zero', assume_sorted=True)
 
         # the values need to be optimized
-        self.params = np.concatenate([np.zeros(self.T * self.D), np.ones(self.K * self.N)])
-        self._init_joint_positions()
+        self.params = self._init_params()
+        self.spline = self._calculate_spline()
 
         # the modulating matrix maps actuator space into full space
         self.control_matrix = spmatrix(1.0, robot.actuated_joints, range(self.U), (self.D, self.U))
         self.control_regular = spmatrix(1.0, range(self.U), range(self.U))
 
-    def get_phase_index(self, t):
-        return self.phase(t)
-
-    def _init_joint_positions(self):
-        base_pos = self.robot.get_base_position()
+    def _init_params(self):
         base_rot = self.robot.get_base_orientation()
-        base_rot = Rotation.from_quat(base_rot).as_rotvec()
-        q = np.atleast_2d(np.concatenate([base_pos, base_rot, self.robot.get_joint_positions()]))
-        q = q.repeat(self.T, axis=0)
+        euler = Rotation.from_quat(base_rot).as_euler('zyx')
+        q = np.concatenate([self.robot.get_base_position(), np.flip(euler), self.robot.get_joint_positions()])
 
-        qs = self.params[:self.T * self.D]
-        qs = qs.reshape([self.T, self.D])
-        qs[:] = q
+        # contact variables
+        c = np.ones(self.N)
 
-    def get_joint_positions(self, t):
-        qs = self.params[:self.T * self.D]
-        qs = qs.reshape([self.T, self.D])
-        return qs[t]
+        return np.repeat(np.atleast_2d(np.concatenate([q, c])), self.K, axis=0)
+
+    def _calculate_spline(self):
+        x = np.linspace(0, self.horizon, self.K)
+        y = self.params[:, :self.D]
+        return CubicSpline(x, y)
+
+    def get_phase_index(self, t):
+        return int(self.phase(t).tolist())
+
+    def get_states(self, t):
+        q = self.spline(t)
+        dq = self.spline(t, 1)
+        ddq = self.spline(t, 2)
+        return q, dq, ddq
 
     def get_contacts(self, t):
-        cs = self.params[self.T * self.D:]
-        cs = cs.reshape([self.K, self.N])
-        index = int(self.get_phase_index(t).tolist())
-        return cs[index]
+        return self.params[self.get_phase_index(t), self.D:]
 
-    def _task_cost(self):
+    def task_cost(self):
         pass
 
-    def _contact_invariant_cost(self):
+    def contact_invariant_cost(self):
         pass
 
     def physics_cost(self):
         cost = 0
 
-        for t in range(1, self.T - 1):
-            # do finite differences
-            q = self.get_joint_positions(t)
-            dq = (self.get_joint_positions(t + 1) - self.get_joint_positions(t - 1)) / (2 * self.delta_time)
-            ddq = (self.get_joint_positions(t + 1) - 2 * q + self.get_joint_positions(t - 1)) / (self.delta_time ** 2)
+        for t in range(self.T):
+            t = t * self.delta_time
+            q, dq, ddq = self.get_states(t)
 
             # solve inverse dynamics for tau
             base_pos = q[:3]
@@ -177,11 +178,12 @@ class CIO(object):
             jac = sparse(jac.tolist())
             combined = sparse([jac.T, self.control_matrix.T])
 
+            # TODO: add linear constraints (friction, pressure)
             second_order = 2 * combined * combined.T + 2 * regular
             first_order = - combined * tau
             solution = solvers.qp(second_order, first_order)
 
-            cost += sum((combined.T * solution['x'] - tau) ** 2)
+            cost += sum((combined.T * solution['x'] - tau) ** 2) * self.delta_time
 
         return cost
 
