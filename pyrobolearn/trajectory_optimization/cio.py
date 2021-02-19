@@ -123,8 +123,8 @@ class CIO(object):
 
     def _init_params(self):
         base_rot = self.robot.get_base_orientation()
-        euler = Rotation.from_quat(base_rot).as_euler('zyx')
-        q = np.concatenate([self.robot.get_base_position(), np.flip(euler), self.robot.get_joint_positions()])
+        base_rot = np.flip(Rotation.from_quat(base_rot).as_euler('zyx'))
+        q = np.concatenate([self.robot.get_base_position(), base_rot, self.robot.get_joint_positions()])
 
         # contact variables
         c = np.ones(self.N)
@@ -152,14 +152,36 @@ class CIO(object):
         pass
 
     def contact_invariant_cost(self):
-        pass
+        cost = 0
+
+        for t in np.linspace(0, self.horizon, self.T, endpoint=False):
+            q, dq, ddq = self.get_states(t)
+            c = self.get_contacts(t)
+
+            base_pos = q[:3]
+            base_rot = Rotation.from_euler('zyx', np.flip(q[3:6])).as_quat()
+
+            robot.reset_base_pose(base_pos, base_rot)
+            robot.reset_joint_states(q[6:], dq[6:])
+            robot.step()
+
+            for i, link_id in enumerate(robot.end_effectors):
+                jac = robot.get_jacobian(link_id, q[6:])
+                de = jac.dot(dq)
+                cost += c[i] * np.linalg.norm(de) * self.delta_time
+
+                # TODO: contact geometry
+                e = robot.get_link_world_positions(link_id)
+                cost += c[i] * (e[2] ** 2) * self.delta_time
+
+        return cost
 
     def physics_cost(self):
         cost = 0
 
-        for t in range(self.T):
-            t = t * self.delta_time
+        for t in np.linspace(0, self.horizon, self.T, endpoint=False):
             q, dq, ddq = self.get_states(t)
+            c = self.get_contacts(t)
 
             # solve inverse dynamics for tau
             base_pos = q[:3]
@@ -170,11 +192,11 @@ class CIO(object):
             tau = self.robot.calculate_inverse_dynamics(ddq, dq, np.concatenate([base_pos, base_rot, joint_pos]))
             tau = matrix(tau)
 
-            force_regular = (0.01 / (self.get_contacts(t) ** 2 + 0.001)).repeat(6)
+            force_regular = (0.01 / (c ** 2 + 0.001)).repeat(6)
             force_regular = spdiag(force_regular.tolist())
             regular = spdiag([force_regular, self.control_regular])
 
-            jac = np.vstack([robot.get_jacobian(i, joint_pos) for i in robot.end_effectors])
+            jac = np.vstack([robot.get_jacobian(link_id, joint_pos) for link_id in robot.end_effectors])
             jac = sparse(jac.tolist())
             combined = sparse([jac.T, self.control_matrix.T])
 
@@ -201,25 +223,12 @@ if __name__ == "__main__":
     world = BasicWorld(sim)
 
     robot = ANYmal(sim)
-    # robot.disable_motor()
+    robot.disable_motor()
 
     robot.print_info()
 
     world.load_robot(robot)
 
     cio = CIO(robot, 10)
-    cio.physics_cost()
-
-    for i in count():
-        q = np.concatenate([robot.get_base_pose(concatenate=True), robot.get_joint_positions()])
-        dq = np.concatenate([robot.get_base_velocity(), robot.get_joint_velocities()])
-        ddq = np.zeros_like(dq)
-
-        tau = robot.calculate_inverse_dynamics(ddq, dq, q)
-        # robot.set_joint_torques(tau[6:])
-
-        link_id = robot.get_end_effector_ids(0)
-        q = robot.get_joint_positions()
-        J = robot.get_jacobian(link_id, q)
-
-        world.step(sim.dt)
+    print(cio.physics_cost())
+    cio.contact_invariant_cost()

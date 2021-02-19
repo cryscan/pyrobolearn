@@ -27,7 +27,6 @@ from pyrobolearn.robots.base import ControllableBody
 from pyrobolearn.robots.sensors import Sensor, sensor_names_to_classes
 from pyrobolearn.robots.actuators import Actuator, actuator_names_to_classes
 
-
 __author__ = "Brian Delhaisse"
 __copyright__ = "Copyright 2018, PyRoboLearn"
 __credits__ = ["Brian Delhaisse (general)", "Leonel Rozo (manipulability)",
@@ -107,8 +106,8 @@ class Robot(ControllableBody):
             for link in range(self.num_links):
                 info = self.sim.get_dynamics_info(self.id, link)
                 mass, local_inertia_diagonal = info[0], np.asarray(info[2])
-                mass *= scale ** 3      # because the density is unchanged when scaling
-                local_inertia_diagonal *= scale ** 5   # 5 = 3+2; 3 is for the mass, and 2 is for the distance: I~mr^2
+                mass *= scale ** 3  # because the density is unchanged when scaling
+                local_inertia_diagonal *= scale ** 5  # 5 = 3+2; 3 is for the mass, and 2 is for the distance: I~mr^2
                 self.sim.change_dynamics(self.id, link, mass=mass, local_inertia_diagonal=local_inertia_diagonal)
 
         # set robot properties
@@ -1235,6 +1234,17 @@ class Robot(ControllableBody):
             joint_ids = self.joints
         return self.sim.get_joint_powers(self.id, joint_ids)
 
+    def reset_base_pose(self, position, orientation):
+        r"""
+        Reset the base position and orientation of the specified object id.
+
+        Args:
+            body_id (int): unique object id.
+            position (np.array[float[3]]): new base position.
+            orientation (np.array[float[4]]): new base orientation (expressed as a quaternion [x,y,z,w])
+        """
+        self.sim.reset_base_pose(self.id, position, orientation)
+
     # TODO: max_velocities and forces
     def set_joint_positions(self, positions, joint_ids=None, kp=None, kd=None, velocities=None, forces=None):
         r"""
@@ -2218,7 +2228,7 @@ class Robot(ControllableBody):
         """
         v1 = self.get_link_world_linear_velocities(link_ids, flatten=False)
         v0 = self.get_base_linear_velocity() if wrt_link_id is None or wrt_link_id == -1 \
-                else self.get_link_world_linear_velocities(wrt_link_id, flatten=False)
+            else self.get_link_world_linear_velocities(wrt_link_id, flatten=False)
         v = (v1 - v0)
         if flatten:
             return v.reshape(-1)
@@ -2243,7 +2253,7 @@ class Robot(ControllableBody):
         """
         w1 = self.get_link_world_angular_velocities(link_ids, flatten=False)
         w0 = self.get_base_angular_velocity() if wrt_link_id is None or wrt_link_id == -1 \
-                else self.get_link_world_angular_velocities(wrt_link_id, flatten=False)
+            else self.get_link_world_angular_velocities(wrt_link_id, flatten=False)
         w = (w1 - w0)
         if flatten:
             return w.reshape(-1)
@@ -2269,7 +2279,7 @@ class Robot(ControllableBody):
         """
         v1 = self.get_link_world_velocities(link_ids, flatten=False)
         v0 = self.get_base_velocity() if wrt_link_id is None or wrt_link_id == -1 \
-                else self.get_link_world_velocities(wrt_link_id, flatten=False)
+            else self.get_link_world_velocities(wrt_link_id, flatten=False)
         v = (v1 - v0)
         if flatten:
             return v.reshape(-1)
@@ -2728,7 +2738,7 @@ class Robot(ControllableBody):
                 raise ValueError("The length of q ({}) is different from the number of DoFs"
                                  " ({}).".format(len(q), len(self.joints)))
 
-        dq = [0]*len(self.joints)
+        dq = [0] * len(self.joints)
 
         # specify point on the link
         if local_position is None:
@@ -3250,7 +3260,7 @@ class Robot(ControllableBody):
             np.array[float[N,D]]: DLS inverse matrix
         """
         J, k = jacobian, damping_factor
-        return J.T.dot(np.linalg.inv(J.dot(J.T) + k**2 * np.identity(J.shape[0])))
+        return J.T.dot(np.linalg.inv(J.dot(J.T) + k ** 2 * np.identity(J.shape[0])))
 
     @staticmethod
     def get_pinv_jacobian(jacobian):
@@ -3390,8 +3400,8 @@ class Robot(ControllableBody):
         return jacobian.dot(dq)
 
     # TODO: implement IK for several links (also by exploiting the null space)
-    def calculate_inverse_kinematics(self, link_id, position, orientation=None, lower_limits=None, upper_limits=None, 
-                                     joint_ranges=None, rest_poses=None, joint_dampings=None, max_iters=1, 
+    def calculate_inverse_kinematics(self, link_id, position, orientation=None, lower_limits=None, upper_limits=None,
+                                     joint_ranges=None, rest_poses=None, joint_dampings=None, max_iters=1,
                                      threshold=1e-4):
         r"""
         Compute the FULL Inverse kinematics; it will return a position for all the actuated joints.
@@ -3710,8 +3720,8 @@ class Robot(ControllableBody):
                 mass_i = self.get_link_masses(linkId)
                 # Create generalized inertia matrix for link
                 Hi = np.diag(self.get_link_local_inertia(linkId))  # Local inertia
-                Mi = np.vstack((np.hstack((mass_i*np.eye(3), mass_i*np.zeros((3, 3)))),
-                                np.hstack((mass_i*np.zeros((3, 3)), Hi))))
+                Mi = np.vstack((np.hstack((mass_i * np.eye(3), mass_i * np.zeros((3, 3)))),
+                                np.hstack((mass_i * np.zeros((3, 3)), Hi))))
                 dHdq[:, :, n] += np.dot(np.dot(dJlink_dq[:, :, n, linkId].T, Mi), Jlinks[:, :, linkId]) + \
                                  np.dot(np.dot(Jlinks[:, :, linkId].T, Mi), dJlink_dq[:, :, n, linkId])
 
@@ -3763,7 +3773,7 @@ class Robot(ControllableBody):
             if q_idx is not None and len(dq) != len(q_idx):
                 dq = dq[q_idx]
         H = self.get_mass_matrix(q, q_idx)
-        return 1./2 * dq.dot(H.dot(dq))
+        return 1. / 2 * dq.dot(H.dot(dq))
 
     def get_gravity_potential_energy(self, q=None, q_idx=None, g=(0., 0., -9.81)):
         r"""
@@ -4685,9 +4695,9 @@ class Robot(ControllableBody):
         self.sim.configure_debug_visualizer(self.sim.COV_ENABLE_GUI, 1)
 
         def getIndex(jnt):
-            if isinstance(jnt, int): # joint id
+            if isinstance(jnt, int):  # joint id
                 return jnt
-            elif isinstance(jnt, str): # joint name
+            elif isinstance(jnt, str):  # joint name
                 return self.get_joint_ids(jnt)
             else:
                 raise TypeError('Expecting a str or int for the joint: {}'.format(jnt))
@@ -4744,6 +4754,7 @@ class Robot(ControllableBody):
                 joint. If str, the name of the joint. If list/tuple, it contains the id or name of the joints.
                 If None, add a slider for each non-fixed joint.
         """
+
         def get_index(joint):
             if isinstance(joint, int):  # joint id
                 return joint
@@ -4826,9 +4837,9 @@ class Robot(ControllableBody):
     def _draw_frame(self, position, orientation, radius, length):
         R = get_matrix_from_quaternion(orientation)
 
-        x = R.dot(np.array([length/2., 0, 0])) + position
-        y = R.dot(np.array([0, length/2., 0])) + position
-        z = R.dot(np.array([0, 0, length/2.])) + position
+        x = R.dot(np.array([length / 2., 0, 0])) + position
+        y = R.dot(np.array([0, length / 2., 0])) + position
+        z = R.dot(np.array([0, 0, length / 2.])) + position
 
         qx = np.array([0.707, 0, 0, 0.707])  # 90deg around x
         qy = np.array([0, 0.707, 0, 0.707])  # 90deg around y
@@ -5180,7 +5191,7 @@ class Robot(ControllableBody):
         # raw_input('enter')
 
         # normalize singular values for scaling
-        scale = S/np.sum(S)
+        scale = S / np.sum(S)
         for i in range(len(S)):
             if S[i] < 0.005:  # 5mm
                 scale[i] = 0.005
